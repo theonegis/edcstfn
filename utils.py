@@ -2,11 +2,10 @@ import sys
 import logging
 import shutil
 import csv
+import warnings
+import rasterio
 
 import torch
-
-import rasterio
-import warnings
 
 
 def make_tuple(x):
@@ -17,6 +16,21 @@ def make_tuple(x):
             return x[0], x[0]
     else:
         return x
+
+
+def save_array_as_tif(matrix, path, profile=None, prototype=None):
+    assert matrix.ndim == 2 or matrix.ndim == 3
+    if prototype:
+        with rasterio.open(str(prototype)) as src:
+            profile = src.profile
+    if not profile:
+        warnings.warn('the geographic profile is not provided')
+    with rasterio.open(path, mode='w', **profile) as dst:
+        if matrix.ndim == 3:
+            for i in range(matrix.shape[0]):
+                dst.write(matrix[i], i + 1)
+        else:
+            dst.write(matrix, 1)
 
 
 class AverageMeter(object):
@@ -36,17 +50,6 @@ class AverageMeter(object):
 
 def cov(x, y):
     return torch.mean((x - torch.mean(x)) * (y - torch.mean(y)))
-
-
-def kge(prediction, target):
-    m_true = torch.mean(target)
-    m_pred = torch.mean(prediction)
-    std_true = torch.std(target)
-    std_pred = torch.std(prediction)
-    r = cov(target, prediction) / (std_true * std_pred)
-    return (1 - torch.sqrt((r - 1) ** 2
-                           + (std_pred / std_true - 1) ** 2
-                           + (m_pred / m_true - 1) ** 2))
 
 
 def ssim(prediction, target, data_range=10000):
@@ -76,8 +79,8 @@ def score(prediction, target, metric):
     if prediction.dim() == 2:
         return metric(prediction.view(-1), target.view(-1)).item()
     if prediction.dim() == 4:
-        prediction.squeeze_()
-        target.squeeze_()
+        prediction = prediction.view(-1, prediction.shape[2], prediction.shape[3])
+        target = prediction.view(-1, target.shape[2], target.shape[3])
     if prediction.dim() == 3:
         n_samples = prediction.shape[0]
         value = 0.0
@@ -87,16 +90,6 @@ def score(prediction, target, metric):
         return value
     else:
         raise ValueError('The dimension of the inputs is not right.')
-
-
-def save_array_as_tif(matrix, path, profile=None, prototype=None):
-    if prototype:
-        with rasterio.open(str(prototype)) as src:
-            profile = src.profile
-    if not profile:
-        warnings.warn('the geographic profile is not provided')
-    with rasterio.open(path, mode='w', **profile) as dst:
-        dst.write(matrix, 1)
 
 
 def get_logger(logpath=None):

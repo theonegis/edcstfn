@@ -1,10 +1,11 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.data import DataLoader
-from torch.optim.lr_scheduler import ExponentialLR
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 
-from model import FusionNet, CharbonnierLoss
+from model import FusionNet, FEncoder, NUM_BANDS, CompoundLoss
 from data import PatchSet, get_pair_path
 import utils
 
@@ -18,7 +19,6 @@ class Experiment(object):
     def __init__(self, option):
         self.device = torch.device('cuda' if option.cuda else 'cpu')
         self.scale = 16
-        self.refs = option.n_refs
         self.image_size = option.image_size
 
         self.save_dir = option.save_dir
@@ -34,13 +34,16 @@ class Experiment(object):
         self.logger = utils.get_logger()
         self.logger.info('Model initialization')
 
-        self.model = FusionNet(self.refs).to(self.device)
+        self.model = FusionNet().to(self.device)
+        self.pretrained = FEncoder().to(self.device)
         if option.cuda and option.ngpu > 1:
-            self.model = nn.DataParallel(self.model,
-                                         device_ids=[i for i in range(option.ngpu)])
+            device_ids = [i for i in range(option.ngpu)]
+            self.model = nn.DataParallel(self.model, device_ids=device_ids)
+            self.pretrained = nn.DataParallel(self.pretrained, device_ids=device_ids)
+        utils.load_pretrained(self.pretrained, option.pretrained)
 
-        self.criterion = CharbonnierLoss()
-        self.optimizer = optim.Adam(self.model.parameters(), lr=option.lr)
+        self.criterion = CompoundLoss(self.pretrained)
+        self.optimizer = optim.Adam(self.model.parameters(), lr=option.lr, weight_decay=1e-6)
 
         self.logger.info(str(self.model))
         n_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
@@ -59,18 +62,25 @@ class Experiment(object):
             target = data[-1]
 
             self.optimizer.zero_grad()
-            prediction = self.model(inputs)
-            loss = self.criterion(prediction, target)
+            predictions = self.model(inputs)
+            loss = (0.5 * (self.criterion(predictions[0], predictions[1], target) +
+                           self.criterion(predictions[2], predictions[3], target))
+                    if len(predictions) == 4 else
+                    self.criterion(predictions[0], predictions[1], target))
             epoch_loss.update(loss.item())
             loss.backward()
             self.optimizer.step()
 
-            score = utils.score(target, prediction, utils.ssim)
-            epoch_score.update(score)
+            with torch.no_grad():
+                score = (0.5 * (F.mse_loss(predictions[1], target) +
+                                F.mse_loss(predictions[3], target))
+                         if len(predictions) == 4 else
+                         F.mse_loss(predictions[1], target))
+            epoch_score.update(score.item())
             t_end = timer()
             self.logger.info(f'Epoch[{n_epoch} {idx}/{batches}] - '
                              f'Loss: {loss.item():.10f} - '
-                             f'SSIM: {score:.5f} - '
+                             f'MSE: {score.item():.5f} - '
                              f'Time: {t_end - t_start}s')
 
         self.logger.info(f'Epoch[{n_epoch}] - {datetime.now()}')
@@ -86,10 +96,10 @@ class Experiment(object):
                 inputs = data[:-1]
                 target = data[-1]
                 prediction = self.model(inputs)
-                loss = self.criterion(prediction, target)
+                loss = self.criterion(None, prediction, target)
                 epoch_loss.update(loss.item())
-                score = utils.score(target, prediction, utils.kge)
-                epoch_score.update(score)
+                score = F.mse_loss(prediction, target)
+                epoch_score.update(score.item())
             # 记录Checkpoint
             is_best = epoch_score.avg >= best_acc
             state = {'epoch': n_epoch,
@@ -100,11 +110,13 @@ class Experiment(object):
                                   best=self.best)
         return epoch_loss.avg, epoch_score.avg
 
-    def train(self, train_dir, val_dir, patch_size, patch_stride, batch_size, num_workers=0, epochs=30, resume=True):
+    def train(self, train_dir, val_dir, patch_size, patch_stride, batch_size, train_refs,
+              num_workers=0, epochs=30, resume=True):
         # 加载数据
         self.logger.info('Loading data...')
-        train_set = PatchSet(train_dir, self.image_size, patch_size, patch_stride, n_refs=self.refs)
-        val_set = PatchSet(val_dir, self.image_size, patch_size, n_refs=self.refs)
+        train_set = PatchSet(train_dir, self.image_size, patch_size, patch_stride,
+                             n_refs=train_refs)
+        val_set = PatchSet(val_dir, self.image_size, patch_size, n_refs=train_refs)
         train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True,
                                   num_workers=num_workers, drop_last=True)
         val_loader = DataLoader(val_set, batch_size=batch_size, num_workers=num_workers)
@@ -119,9 +131,8 @@ class Experiment(object):
                 start_epoch = int(df.iloc[-1]['epoch']) + 1
 
         self.logger.info('Training...')
-        scheduler = ExponentialLR(self.optimizer, 0.75, last_epoch=start_epoch - 1)
+        scheduler = ReduceLROnPlateau(self.optimizer, mode='min', factor=0.1, patience=5)
         for epoch in range(start_epoch, epochs + start_epoch):
-            scheduler.step()
             # 输出学习率
             for param_group in self.optimizer.param_groups:
                 self.logger.info(f"Current learning rate: {param_group['lr']}")
@@ -131,27 +142,28 @@ class Experiment(object):
             csv_header = ['epoch', 'train_loss', 'train_acc', 'val_loss', 'val_acc']
             csv_values = [epoch, train_loss, train_score, val_loss, val_score]
             utils.log_csv(self.history, csv_values, header=csv_header)
+            scheduler.step(val_loss)
 
-    def test(self, test_dir, patch_size, num_workers=0):
+    def test(self, test_dir, patch_size, test_refs, num_workers=0):
         self.model.eval()
         patch_size = utils.make_tuple(patch_size)
         utils.load_checkpoint(self.best, model=self.model)
         self.logger.info('Testing...')
         # 记录测试文件夹中的文件路径，用于最后投影信息的匹配
         image_dirs = [p for p in test_dir.glob('*') if p.is_dir()]
-        image_paths = [get_pair_path(d, self.refs) for d in image_dirs]
+        image_paths = [get_pair_path(d, test_refs) for d in image_dirs]
 
         # 在预测阶段，对图像进行切块的时候必须刚好裁切完全，这样才能在预测结束后进行完整的拼接
         assert self.image_size[0] % patch_size[0] == 0
         assert self.image_size[1] % patch_size[1] == 0
         rows = int(self.image_size[1] / patch_size[1])
         cols = int(self.image_size[0] / patch_size[0])
-        n_blocks = rows * cols  # 一张图像中的分块数目
-        test_set = PatchSet(test_dir, self.image_size, patch_size, n_refs=self.refs)
+        n_blocks = rows * cols
+        test_set = PatchSet(test_dir, self.image_size, patch_size, n_refs=test_refs)
         test_loader = DataLoader(test_set, batch_size=1, num_workers=num_workers)
 
-        scaled_patch_size = tuple([i * self.scale for i in patch_size])
-        scaled_image_size = tuple([i * self.scale for i in self.image_size])
+        scaled_patch_size = tuple(i * self.scale for i in patch_size)
+        scaled_image_size = tuple(i * self.scale for i in self.image_size)
         scale_factor = 10000
         with torch.no_grad():
             im_count = 0
@@ -159,12 +171,9 @@ class Experiment(object):
             t_start = datetime.now()
             for inputs in test_loader:
                 # 如果包含了target数据，则去掉最后的target
-                if len(inputs) == 4 or len(inputs) == 6:
+                if len(inputs) % 2 == 0:
                     del inputs[-1]
                 name = image_paths[im_count][-1].name
-                if len(image_paths[im_count]) == 5 or len(image_paths[im_count]) == 8:
-                    name = image_paths[im_count][-2].name
-
                 if len(patches) == 0:
                     t_start = timer()
                     self.logger.info(f'Predict on image {name}')
@@ -172,20 +181,20 @@ class Experiment(object):
                 # 分块进行预测（每次进入深度网络的都是影像中的一块）
                 inputs = [im.to(self.device) for im in inputs]
                 prediction = self.model(inputs)
-                prediction = np.squeeze(prediction.cpu().numpy())
+                prediction = prediction.cpu().numpy()
                 patches.append(prediction * scale_factor)
 
                 # 完成一张影像以后进行拼接
                 if len(patches) == n_blocks:
-                    result = np.empty(scaled_image_size, dtype=np.float32)
+                    result = np.empty((NUM_BANDS, *scaled_image_size), dtype=np.float32)
                     block_count = 0
                     for i in range(rows):
                         row_start = i * scaled_patch_size[1]
                         for j in range(cols):
                             col_start = j * scaled_patch_size[0]
-                            result[
-                                col_start: col_start + scaled_patch_size[0],
-                                row_start: row_start + scaled_patch_size[1]
+                            result[:,
+                            col_start: col_start + scaled_patch_size[0],
+                            row_start: row_start + scaled_patch_size[1]
                             ] = patches[block_count]
                             block_count += 1
                     patches.clear()
