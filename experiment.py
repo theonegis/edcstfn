@@ -5,7 +5,7 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 
-from model import FusionNet, FEncoder, NUM_BANDS, CompoundLoss
+from model import *
 from data import PatchSet, get_pair_path
 import utils
 
@@ -35,7 +35,7 @@ class Experiment(object):
         self.logger.info('Model initialization')
 
         self.model = FusionNet().to(self.device)
-        self.pretrained = FEncoder().to(self.device)
+        self.pretrained = Pretrained().to(self.device)
         if option.cuda and option.ngpu > 1:
             device_ids = [i for i in range(option.ngpu)]
             self.model = nn.DataParallel(self.model, device_ids=device_ids)
@@ -63,19 +63,17 @@ class Experiment(object):
 
             self.optimizer.zero_grad()
             predictions = self.model(inputs)
-            loss = (0.5 * (self.criterion(predictions[0], predictions[1], target) +
-                           self.criterion(predictions[2], predictions[3], target))
-                    if len(predictions) == 4 else
-                    self.criterion(predictions[0], predictions[1], target))
+            loss = (0.5 * (self.criterion(predictions[0], target) +
+                           self.criterion(predictions[1], target))
+                    if len(predictions) == 2 else self.criterion(predictions, target))
             epoch_loss.update(loss.item())
             loss.backward()
             self.optimizer.step()
 
             with torch.no_grad():
-                score = (0.5 * (F.mse_loss(predictions[1], target) +
-                                F.mse_loss(predictions[3], target))
-                         if len(predictions) == 4 else
-                         F.mse_loss(predictions[1], target))
+                score = (0.5 * (F.mse_loss(predictions[0], target) +
+                                F.mse_loss(predictions[1], target))
+                         if len(predictions) == 2 else F.mse_loss(predictions, target))
             epoch_score.update(score.item())
             t_end = timer()
             self.logger.info(f'Epoch[{n_epoch} {idx}/{batches}] - '
@@ -96,7 +94,7 @@ class Experiment(object):
                 inputs = data[:-1]
                 target = data[-1]
                 prediction = self.model(inputs)
-                loss = self.criterion(None, prediction, target)
+                loss = self.criterion(prediction, target)
                 epoch_loss.update(loss.item())
                 score = F.mse_loss(prediction, target)
                 epoch_score.update(score.item())

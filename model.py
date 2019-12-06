@@ -26,10 +26,9 @@ class CompoundLoss(nn.Module):
         self.alpha = alpha
         self.normalize = normalize
 
-    def forward(self, medium, prediction, target):
-        medium = self.pretrained(prediction) if medium is None else medium
+    def forward(self, prediction, target):
         return (F.mse_loss(prediction, target) +
-                F.mse_loss(medium, self.pretrained(target)) +
+                F.mse_loss(self.pretrained(prediction), self.pretrained(target)) +
                 self.alpha * (1.0 - msssim(prediction, target,
                                            normalize=self.normalize)))
 
@@ -71,6 +70,19 @@ class Decoder(nn.Sequential):
         )
 
 
+class Pretrained(nn.Sequential):
+    def __init__(self):
+        channels = [NUM_BANDS, 32, 64, 128]
+        super(Pretrained, self).__init__(
+            conv3x3(channels[0], channels[1]),
+            nn.ReLU(True),
+            conv3x3(channels[1], channels[2], 2),
+            nn.ReLU(True),
+            conv3x3(channels[2], channels[3], 2),
+            nn.ReLU(True)
+        )
+
+
 class FusionNet(nn.Module):
     def __init__(self):
         super(FusionNet, self).__init__()
@@ -89,7 +101,7 @@ class FusionNet(nn.Module):
             if self.training:
                 prev_fusion = self.encoder(inputs[1]) + prev_diff
                 next_fusion = self.encoder(inputs[3]) + next_diff
-                return prev_fusion, self.decoder(prev_fusion), next_fusion, self.decoder(next_fusion)
+                return self.decoder(prev_fusion), self.decoder(next_fusion)
             else:
                 # zero = inputs[0].new_tensor(0.0)
                 one = inputs[0].new_tensor(1.0)
@@ -112,8 +124,4 @@ class FusionNet(nn.Module):
                 result = self.decoder(result)
                 return result
         else:
-            if self.training:
-                prev_fusion = self.encoder(inputs[1]) + prev_diff
-                return prev_fusion, self.decoder(prev_fusion)
-            else:
-                return self.decoder(self.encoder(inputs[1]) + prev_diff)
+            return self.decoder(self.encoder(inputs[1]) + prev_diff)
