@@ -17,10 +17,7 @@ class PatchSet(Dataset):
     def __init__(self, image_dir, image_size, patch_size, patch_stride=None):
         super(PatchSet, self).__init__()
         patch_size = make_tuple(patch_size)
-        if not patch_stride:
-            patch_stride = patch_size
-        else:
-            patch_stride = make_tuple(patch_stride)
+        patch_stride = patch_size if not patch_stride else make_tuple(patch_stride)
 
         self.root_dir = image_dir
         self.image_size = image_size
@@ -48,11 +45,11 @@ class PatchSet(Dataset):
     def __getitem__(self, index):
         id_n, id_x, id_y = self.map_index(index)
         with rasterio.open(str(self.images[id_n])) as ds:
-            image = ds.read().astype(np.float32)
+            image = ds.read()
 
         patch = image[:,
                 id_x:(id_x + self.patch_size[0]),
-                id_y:(id_y + self.patch_size[1])]
+                id_y:(id_y + self.patch_size[1])].astype(np.float32)
         patch = self.transform(patch)
 
         return patch

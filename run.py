@@ -7,12 +7,15 @@ import torch.backends.cudnn as cudnn
 from experiment import Experiment
 
 import faulthandler
+import gc
 
+
+gc.set_threshold(100)
 faulthandler.enable()
 torch.manual_seed(2019)
 
 """
-nohup python run.py --lr 1e-3 --num_workers 6 --batch_size 6 --epochs 100 --cuda --ngpu 3 --image_size 4800 --patch_size 1600 --patch_stride 600 --test_patch 1600 --save_dir out --train_dir data --test_dir data &> out.log &
+nohup python run.py --lr 1e-3 --num_workers 3 --batch_size 6 --epochs 100 --cuda --ngpu 2 --image_size 4800 --patch_size 1000 --patch_stride 800 --test_patch 1600 --save_dir out --train_dir data --test_dir data &> out.log &
 """
 
 # 获取模型运行时必须的一些参数

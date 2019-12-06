@@ -42,26 +42,31 @@ class Upsample(nn.Module):
 
 class Encoder(nn.Sequential):
     def __init__(self):
-        channels = [NUM_BANDS, 32, 64, 128]
+        channels = [NUM_BANDS, 32, 64, 128, 128]
         super(Encoder, self).__init__(
             conv3x3(channels[0], channels[1]),
             nn.ReLU(True),
             conv3x3(channels[1], channels[2]),
             nn.ReLU(True),
-            conv3x3(channels[2], channels[3]),
+            conv3x3(channels[2], channels[3], 2),
+            nn.ReLU(True),
+            conv3x3(channels[3], channels[4]),
             nn.ReLU(True)
         )
 
 
 class Decoder(nn.Sequential):
     def __init__(self):
-        channels = [128, 64, 32, NUM_BANDS]
+        channels = [128, 128, 64, 32, NUM_BANDS]
         super(Decoder, self).__init__(
             conv3x3(channels[0], channels[1]),
             nn.ReLU(True),
+            Upsample(2),
             conv3x3(channels[1], channels[2]),
             nn.ReLU(True),
-            nn.Conv2d(channels[2], channels[3], 1)
+            conv3x3(channels[2], channels[3]),
+            nn.ReLU(True),
+            nn.Conv2d(channels[3], channels[4], 1)
         )
 
 
