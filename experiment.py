@@ -125,7 +125,7 @@ class Experiment(object):
             utils.load_checkpoint(self.checkpoint, model=self.model, optimizer=self.optimizer)
             if self.history.exists():
                 df = pd.read_csv(self.history)
-                best_val_acc = df['val_acc'].max()
+                best_val_acc = df['val_acc'].min()
                 start_epoch = int(df.iloc[-1]['epoch']) + 1
 
         self.logger.info('Training...')
