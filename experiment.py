@@ -99,7 +99,7 @@ class Experiment(object):
                 score = F.mse_loss(prediction, target)
                 epoch_score.update(score.item())
             # 记录Checkpoint
-            is_best = epoch_score.avg >= best_acc
+            is_best = epoch_score.avg <= best_acc
             state = {'epoch': n_epoch,
                      'state_dict': self.model.state_dict(),
                      'optim_dict': self.optimizer.state_dict()}
