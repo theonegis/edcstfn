@@ -1,5 +1,7 @@
 # An Enhanced Deep Convolutional SpatioTemporal Network for Remote Sensing Images (EDCSTFN)
 
+Notice: The source code has been refactored. If this causes any runtime error, please feel free to contat with me or make a pull request.
+
 The master branch is the implementation of the EDCSTFN model.
 
 The autoencoder branch is the implementation of the hourglass AutoEncoder. The pretrained Encoder subnet is used in the EDCSTFN to calculate the feature loss.
