@@ -75,31 +75,23 @@ class Experiment(object):
         self.logger.info(f'Epoch[{n_epoch}] - {datetime.now()}')
         return epoch_loss.avg, epoch_score.avg
 
-    def test_on_epoch(self, n_epoch, data_loader, best_acc):
+    @torch.no_grad()
+    def test_on_epoch(self, data_loader):
         self.model.eval()
         epoch_loss = utils.AverageMeter()
-        epoch_score = utils.AverageMeter()
-        with torch.no_grad():
-            for data in data_loader:
-                data = data.to(self.device)
-                prediction = self.model(data)
-                loss = self.criterion(prediction, data)
-                epoch_loss.update(loss.item())
-                score = F.mse_loss(prediction, data)
-                epoch_score.update(score.item())
-            # 记录Checkpoint
-            is_best = epoch_score.avg >= best_acc
-            state = {'epoch': n_epoch,
-                     'state_dict': self.model.state_dict(),
-                     'optim_dict': self.optimizer.state_dict()}
-            utils.save_checkpoint(state, is_best=is_best,
-                                  checkpoint=self.checkpoint,
-                                  best=self.best)
-        return epoch_loss.avg, epoch_score.avg
+        epoch_error = utils.AverageMeter()
+        for data in data_loader:
+            data = data.to(self.device)
+            prediction = self.model(data)
+            loss = self.criterion(prediction, data)
+            epoch_loss.update(loss.item())
+            score = F.mse_loss(prediction, data)
+            epoch_error.update(score.item())
+        utils.save_checkpoint(self.model, self.optimizer, self.checkpoint)
+        return epoch_loss.avg, epoch_error.avg
 
     def train(self, train_dir, patch_size, patch_stride, batch_size,
               num_workers=0, epochs=30, resume=True):
-        # 加载数据
         self.logger.info('Loading data...')
         dataset = PatchSet(train_dir, self.image_size, patch_size, patch_stride)
         lengths = (math.floor(len(dataset) * 0.8), math.ceil(len(dataset) * 0.2))
@@ -107,29 +99,32 @@ class Experiment(object):
         train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True,
                                   num_workers=num_workers, drop_last=True)
         val_loader = DataLoader(val_set, batch_size=batch_size, num_workers=num_workers)
-        best_val_acc = 0
+        least_error = 0
         start_epoch = 0
         if resume and self.checkpoint.exists():
             utils.load_checkpoint(self.checkpoint, model=self.model, optimizer=self.optimizer)
             if self.history.exists():
                 df = pd.read_csv(self.history)
-                best_val_acc = df['val_acc'].max()
+                least_error = df['val_error'].min()
                 start_epoch = int(df.iloc[-1]['epoch']) + 1
 
         self.logger.info('Training...')
         scheduler = ReduceLROnPlateau(self.optimizer, mode='min', factor=0.1, patience=5)
         for epoch in range(start_epoch, epochs + start_epoch):
-            # 输出学习率
             for param_group in self.optimizer.param_groups:
                 self.logger.info(f"Current learning rate: {param_group['lr']}")
 
-            train_loss, train_score = self.train_on_epoch(epoch, train_loader)
-            val_loss, val_score = self.test_on_epoch(epoch, val_loader, best_val_acc)
-            csv_header = ['epoch', 'train_loss', 'train_acc', 'val_loss', 'val_acc']
-            csv_values = [epoch, train_loss, train_score, val_loss, val_score]
+            train_loss, train_error = self.train_on_epoch(epoch, train_loader)
+            val_loss, val_error = self.test_on_epoch(epoch, val_loader, least_error)
+            csv_header = ['epoch', 'train_loss', 'train_error', 'val_error', 'val_error']
+            csv_values = [epoch, train_loss, train_error, val_loss, val_error]
             utils.log_csv(self.history, csv_values, header=csv_header)
             scheduler.step(val_loss)
+            if val_error <= least_error:
+                shutil.copy(self.checkpoint, self.best)
+                least_error = val_error
 
+    @torch.no_grad()
     def test(self, test_dir, patch_size, num_workers=0):
         self.model.eval()
         patch_size = utils.make_tuple(patch_size)
@@ -148,39 +143,38 @@ class Experiment(object):
         test_loader = DataLoader(test_set, batch_size=1, num_workers=num_workers)
 
         scale_factor = 10000
-        with torch.no_grad():
-            im_count = 0
-            patches = []
-            t_start = datetime.now()
-            for data in test_loader:
-                if len(patches) == 0:
-                    t_start = timer()
-                    self.logger.info(f'Predict on image {images[im_count].name}')
+        im_count = 0
+        patches = []
+        t_start = datetime.now()
+        for data in test_loader:
+            if len(patches) == 0:
+                t_start = timer()
+                self.logger.info(f'Predict on image {images[im_count].name}')
 
-                # 分块进行预测（每次进入深度网络的都是影像中的一块）
-                data = data.to(self.device)
-                prediction = self.model(data)
-                prediction = prediction.cpu().numpy()
-                patches.append(prediction * scale_factor)
+            # 分块进行预测（每次进入深度网络的都是影像中的一块）
+            data = data.to(self.device)
+            prediction = self.model(data)
+            prediction = prediction.cpu().numpy()
+            patches.append(prediction * scale_factor)
 
-                # 完成一张影像以后进行拼接
-                if len(patches) == n_blocks:
-                    result = np.empty((NUM_BANDS, *self.image_size), dtype=np.float32)
-                    block_count = 0
-                    for i in range(rows):
-                        row_start = i * patch_size[1]
-                        for j in range(cols):
-                            col_start = j * patch_size[0]
-                            result[:,
-                            col_start: col_start + patch_size[0],
-                            row_start: row_start + patch_size[1]
-                            ] = patches[block_count]
-                            block_count += 1
-                    patches.clear()
-                    # 存储预测影像结果
-                    result = result.astype(np.int16)
-                    utils.save_array_as_tif(result, self.test_dir / images[im_count].name,
-                                            prototype=str(images[im_count]))
-                    im_count += 1
-                    t_end = timer()
-                    self.logger.info(f'Time cost: {t_end - t_start}s')
+            # 完成一张影像以后进行拼接
+            if len(patches) == n_blocks:
+                result = np.empty((NUM_BANDS, *self.image_size), dtype=np.float32)
+                block_count = 0
+                for i in range(rows):
+                    row_start = i * patch_size[1]
+                    for j in range(cols):
+                        col_start = j * patch_size[0]
+                        result[:,
+                        col_start: col_start + patch_size[0],
+                        row_start: row_start + patch_size[1]
+                        ] = patches[block_count]
+                        block_count += 1
+                patches.clear()
+                # 存储预测影像结果
+                result = result.astype(np.int16)
+                utils.save_array_as_tif(result, self.test_dir / images[im_count].name,
+                                        prototype=str(images[im_count]))
+                im_count += 1
+                t_end = timer()
+                self.logger.info(f'Time cost: {t_end - t_start}s')

@@ -7,12 +7,7 @@ import torch.backends.cudnn as cudnn
 from experiment import Experiment
 
 import faulthandler
-import gc
-
-
-gc.set_threshold(100)
 faulthandler.enable()
-torch.manual_seed(2019)
 
 """
 nohup python run.py --lr 1e-3 --num_workers 3 --batch_size 6 --epochs 100 --cuda --ngpu 2 --image_size 4800 --patch_size 1000 --patch_stride 800 --test_patch 1600 --save_dir out --train_dir data --test_dir data &> out.log &
@@ -45,9 +40,11 @@ parser.add_argument('--test_patch', type=int, nargs='+',
                     help='the fine image patch size for fusion test')
 opt = parser.parse_args()
 
-if opt.cuda and not torch.cuda.is_available():
+torch.manual_seed(2019)
+if not torch.cuda.is_available():
     opt.cuda = False
-else:
+if opt.cuda:
+    torch.cuda.manual_seed_all(2019)
     cudnn.benchmark = True
     cudnn.deterministic = True
 
