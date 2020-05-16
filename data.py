@@ -18,7 +18,7 @@ PRE_PREFIX = '01'
 REF_PREFIX_2 = '02'
 COARSE_PREFIX = 'MOD09A1'
 FINE_PREFIX = 'LC08'
-SCALE = 16
+SCALE_FACTOR = 16
 
 
 def get_pair_path(im_dir, n_refs):
@@ -52,7 +52,6 @@ def get_pair_path(im_dir, n_refs):
 def load_image_pair(im_dir, n_refs):
     # 按照一定顺序获取给定文件夹下的一组数据
     paths = get_pair_path(im_dir, n_refs)
-    # 将组织好的数据转为Image对象
     images = []
     for p in paths:
         with rasterio.open(str(p)) as ds:
@@ -60,8 +59,8 @@ def load_image_pair(im_dir, n_refs):
             images.append(im)
 
     # 对数据的尺寸进行验证
-    assert images[0].shape[1] * SCALE == images[1].shape[1]
-    assert images[0].shape[2] * SCALE == images[1].shape[2]
+    assert images[0].shape[1] * SCALE_FACTOR == images[1].shape[1]
+    assert images[0].shape[2] * SCALE_FACTOR == images[1].shape[2]
     return images
 
 
@@ -76,7 +75,6 @@ class PatchSet(Dataset):
     每张图片分割成小块进行加载
     Pillow中的Image是列优先，而Numpy中的ndarray是行优先
     """
-
     def __init__(self, image_dir, image_size, patch_size, patch_stride=None, n_refs=1):
         super(PatchSet, self).__init__()
         patch_size = make_tuple(patch_size)
@@ -102,7 +100,6 @@ class PatchSet(Dataset):
         self.transform = im2tensor
 
     def map_index(self, index):
-        # 将全局的index映射到具体的图像对文件夹索引(id_n)，图像裁剪的列号与行号(id_x, id_y)
         id_n = index // (self.num_patches_x * self.num_patches_y)
         residual = index % (self.num_patches_x * self.num_patches_y)
         id_x = self.patch_stride[0] * (residual % self.num_patches_x)
@@ -114,7 +111,7 @@ class PatchSet(Dataset):
         images = load_image_pair(self.image_dirs[id_n], self.refs)
         patches = [None] * len(images)
 
-        scales = [1, SCALE]
+        scales = [1, SCALE_FACTOR]
         for i in range(len(patches)):
             scale = scales[i % 2]
             im = images[i][:,

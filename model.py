@@ -20,7 +20,7 @@ def interpolate(inputs, size=None, scale_factor=None):
 
 
 class CompoundLoss(nn.Module):
-    def __init__(self, pretrained, alpha=0.5, normalize=True):
+    def __init__(self, pretrained, alpha=0.8, normalize=True):
         super(CompoundLoss, self).__init__()
         self.pretrained = pretrained
         self.alpha = alpha
@@ -103,24 +103,15 @@ class FusionNet(nn.Module):
                 next_fusion = self.encoder(inputs[3]) + next_diff
                 return self.decoder(prev_fusion), self.decoder(next_fusion)
             else:
-                # zero = inputs[0].new_tensor(0.0)
                 one = inputs[0].new_tensor(1.0)
                 epsilon = inputs[0].new_tensor(1e-8)
-                # threshold = inputs[0].new_tensor(0.2)
                 prev_dist = torch.abs(prev_diff) + epsilon
                 next_dist = torch.abs(next_diff) + epsilon
                 prev_mask = one.div(prev_dist).div(one.div(prev_dist) + one.div(next_dist))
-                # prev_mask[prev_dist - next_dist > threshold] = zero
-                # prev_mask[next_dist - prev_dist > threshold] = one
                 prev_mask = prev_mask.clamp_(0.0, 1.0)
                 next_mask = one - prev_mask
                 result = (prev_mask * (self.encoder(inputs[1]) + prev_diff) +
                           next_mask * (self.encoder(inputs[3]) + next_diff))
-                # prev_fusion = self.encoder(inputs[1]) + prev_diff
-                # next_fusion = self.encoder(inputs[3]) + next_diff
-                # prev_fusion[prev_dist >= next_dist] = zero
-                # next_fusion[prev_dist < next_dist] = zero
-                # result = prev_fusion + next_fusion
                 result = self.decoder(result)
                 return result
         else:

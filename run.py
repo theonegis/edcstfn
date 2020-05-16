@@ -48,13 +48,10 @@ parser.add_argument('--test_patch', type=int, nargs='+', default=50,
 opt = parser.parse_args()
 
 torch.manual_seed(2019)
-# torch.cuda.set_device(1)
-if torch.cuda.is_available():
-    torch.cuda.manual_seed_all(2019)
-
-if opt.cuda and not torch.cuda.is_available():
+if not torch.cuda.is_available():
     opt.cuda = False
-else:
+if opt.cuda:
+    torch.cuda.manual_seed_all(2019)
     cudnn.benchmark = True
     cudnn.deterministic = True
 

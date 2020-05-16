@@ -1,40 +1,24 @@
 import sys
 import logging
-import shutil
 import csv
-import warnings
+from pathlib import Path
 import rasterio
 
 import torch
+import torch.nn as nn
 
 
 def make_tuple(x):
     if isinstance(x, int):
         return x, x
-    if isinstance(x, list):
-        if len(x) == 1:
-            return x[0], x[0]
-    else:
-        return x
-
-
-def save_array_as_tif(matrix, path, profile=None, prototype=None):
-    assert matrix.ndim == 2 or matrix.ndim == 3
-    if prototype:
-        with rasterio.open(str(prototype)) as src:
-            profile = src.profile
-    if not profile:
-        warnings.warn('the geographic profile is not provided')
-    with rasterio.open(path, mode='w', **profile) as dst:
-        if matrix.ndim == 3:
-            for i in range(matrix.shape[0]):
-                dst.write(matrix[i], i + 1)
-        else:
-            dst.write(matrix, 1)
+    if isinstance(x, list) and len(x) == 1:
+        return x[0], x[0]
+    return x
 
 
 class AverageMeter(object):
     """Computes and stores the average and current value"""
+
     def __init__(self):
         self.val = 0.0
         self.avg = 0.0
@@ -48,84 +32,46 @@ class AverageMeter(object):
         self.avg = self.sum / self.count
 
 
-def cov(x, y):
-    return torch.mean((x - torch.mean(x)) * (y - torch.mean(y)))
-
-
-def ssim(prediction, target, data_range=10000):
-    K1 = 0.01
-    K2 = 0.03
-    L = data_range
-
-    mu_x = prediction.mean()
-    mu_y = target.mean()
-
-    sig_x = prediction.std()
-    sig_y = target.std()
-    sig_xy = cov(target, prediction)
-
-    C1 = (K1 * L) ** 2
-    C2 = (K2 * L) ** 2
-
-    return ((2 * mu_x * mu_y + C1) * (2 * sig_xy + C2) /
-            ((mu_x ** 2 + mu_y ** 2 + C1) * (sig_x ** 2 + sig_y ** 2 + C2)))
-
-
-def score(prediction, target, metric):
-    assert prediction.shape == target.shape
-    prediction = prediction.detach() * 10000
-    target = target.detach() * 10000
-
-    if prediction.dim() == 2:
-        return metric(prediction.view(-1), target.view(-1)).item()
-    if prediction.dim() == 4:
-        prediction = prediction.view(-1, prediction.shape[2], prediction.shape[3])
-        target = prediction.view(-1, target.shape[2], target.shape[3])
-    if prediction.dim() == 3:
-        n_samples = prediction.shape[0]
-        value = 0.0
-        for i in range(n_samples):
-            value += metric(prediction[i].view(-1), target[i].view(-1)).item()
-        value = value / n_samples
-        return value
-    else:
-        raise ValueError('The dimension of the inputs is not right.')
-
-
 def get_logger(logpath=None):
     logger = logging.getLogger()
     logger.setLevel(logging.INFO)
 
     if not logger.handlers:
-        # 文件日志
-        if logpath:
+        if logpath is not None:
             file_handler = logging.FileHandler(logpath)
             file_handler.setFormatter(logging.Formatter('%(message)s'))
             logger.addHandler(file_handler)
 
-        # 控制台日志
         stream_handler = logging.StreamHandler(sys.stdout)
         stream_handler.setFormatter(logging.Formatter('%(message)s'))
         logger.addHandler(stream_handler)
     return logger
 
 
-def save_checkpoint(state, is_best, checkpoint='last.pth', best='best.pth'):
-    torch.save(state, checkpoint)
-
-    if is_best:
-        shutil.copy(str(checkpoint), str(best))
+def save_checkpoint(model, optimizer, path):
+    if path.exists():
+        path.unlink()
+    model = model.module if isinstance(model, nn.DataParallel) else model
+    state = {'state_dict': model.state_dict()}
+    if optimizer:
+        state = {'state_dict': model.state_dict(),
+                 'optim_dict': optimizer.state_dict()}
+    if isinstance(path, Path):
+        torch.save(state, str(path.resolve()))
+    else:
+        torch.save(state, str(path.resolve()))
 
 
 def load_checkpoint(checkpoint, model, optimizer=None, map_location=None):
     if not checkpoint.exists():
         raise FileNotFoundError(f"File doesn't exist {checkpoint}")
     state = torch.load(checkpoint, map_location=map_location)
+    if isinstance(model, nn.DataParallel):
+        model = model.module
     model.load_state_dict(state['state_dict'])
 
     if optimizer:
         optimizer.load_state_dict(state['optim_dict'])
-
     return state
 
 
@@ -146,6 +92,8 @@ def log_csv(filepath, values, header=None, multirows=False):
 
 
 def load_pretrained(model, pretrained, requires_grad=False):
+    if isinstance(model, nn.DataParallel):
+        model = model.module
     model_dict = model.state_dict()
     pretrained_dict = torch.load(pretrained)['state_dict']
     # 1. filter out unnecessary keys
@@ -157,3 +105,16 @@ def load_pretrained(model, pretrained, requires_grad=False):
     if not requires_grad:
         for param in model.parameters():
             param.requires_grad = False
+
+
+def save_array_as_tif(matrix, path, profile=None, prototype=None):
+    assert matrix.ndim == 2 or matrix.ndim == 3
+    if prototype:
+        with rasterio.open(str(prototype)) as src:
+            profile = src.profile
+    with rasterio.open(path, mode='w', **profile) as dst:
+        if matrix.ndim == 3:
+            for i in range(matrix.shape[0]):
+                dst.write(matrix[i], i + 1)
+        else:
+            dst.write(matrix, 1)
