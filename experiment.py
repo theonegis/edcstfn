@@ -116,11 +116,11 @@ class Experiment(object):
             utils.load_checkpoint(self.checkpoint, self.model, self.optimizer)
             if self.history.exists():
                 df = pd.read_csv(self.history)
-                least_error = df['val_acc'].min()
+                least_error = df['val_error'].min()
                 start_epoch = int(df.iloc[-1]['epoch']) + 1
 
         self.logger.info('Training...')
-        scheduler = ReduceLROnPlateau(self.optimizer, mode='min', factor=0.1, patience=10)
+        scheduler = ReduceLROnPlateau(self.optimizer, mode='min', factor=0.1, patience=5)
         for epoch in range(start_epoch, epochs + start_epoch):
             for param_group in self.optimizer.param_groups:
                 self.logger.info(f"Current learning rate: {param_group['lr']}")
