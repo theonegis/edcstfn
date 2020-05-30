@@ -132,7 +132,7 @@ class Experiment(object):
             utils.log_csv(self.history, csv_values, header=csv_header)
             scheduler.step(val_loss)
             if val_error < least_error:
-                shutil.copy(self.checkpoint, self.best)
+                shutil.copy(str(self.checkpoint), str(self.best))
                 least_error = val_error
 
     @torch.no_grad()
