@@ -72,13 +72,15 @@ class Decoder(nn.Sequential):
 
 class Pretrained(nn.Sequential):
     def __init__(self):
-        channels = [NUM_BANDS, 32, 64, 128]
+        channels = [NUM_BANDS, 32, 64, 128, 128]
         super(Pretrained, self).__init__(
             conv3x3(channels[0], channels[1]),
             nn.ReLU(True),
-            conv3x3(channels[1], channels[2], 2),
+            conv3x3(channels[1], channels[2]),
             nn.ReLU(True),
             conv3x3(channels[2], channels[3], 2),
+            nn.ReLU(True),
+            conv3x3(channels[3], channels[4]),
             nn.ReLU(True)
         )
 
