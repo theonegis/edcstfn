@@ -14,6 +14,8 @@ from datetime import datetime
 import numpy as np
 import pandas as pd
 import math
+import shutil
+import sys
 
 
 class Experiment(object):
@@ -99,7 +101,7 @@ class Experiment(object):
         train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True,
                                   num_workers=num_workers, drop_last=True)
         val_loader = DataLoader(val_set, batch_size=batch_size, num_workers=num_workers)
-        least_error = 0
+        least_error = sys.maxsize
         start_epoch = 0
         if resume and self.checkpoint.exists():
             utils.load_checkpoint(self.checkpoint, model=self.model, optimizer=self.optimizer)
