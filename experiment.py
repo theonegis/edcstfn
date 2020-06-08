@@ -115,7 +115,7 @@ class Experiment(object):
                 self.logger.info(f"Current learning rate: {param_group['lr']}")
 
             train_loss, train_error = self.train_on_epoch(epoch, train_loader)
-            val_loss, val_error = self.test_on_epoch(epoch, val_loader, least_error)
+            val_loss, val_error = self.test_on_epoch(val_loader)
             csv_header = ['epoch', 'train_loss', 'train_error', 'val_error', 'val_error']
             csv_values = [epoch, train_loss, train_error, val_loss, val_error]
             utils.log_csv(self.history, csv_values, header=csv_header)
